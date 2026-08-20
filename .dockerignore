@@ -1,0 +1,26 @@
+# Git / metadata
+.git
+.gitignore
+.github
+.idea
+.vscode
+*.md
+!BENZHI_README.md
+
+# Local Go artifacts / build cache
+*.exe
+*.test
+*.out
+task136-seqannot
+seqannot
+seqannot.db
+*.db
+*.db-wal
+*.db-shm
+
+# OS junk
+.DS_Store
+Thumbs.db
+
+# The vendored deps are intentionally INCLUDED in the build context so the
+# Dockerfile can COPY vendor ./vendor. Do not add vendor/ here.

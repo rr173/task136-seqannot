@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>seqannot — DNA 序列分析与注释引擎</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+<h1>seqannot</h1>
+<p class="tag">DNA 序列分析与注释引擎 · 六读码框翻译 / ORF / motif / 限制酶 / 双序列比对</p>
+</header>
+<main>
+<section class="card" id="seq-card">
+<h2>1. 提交序列</h2>
+<div class="row">
+<label>名称<input id="seq-name" type="text" placeholder="seq1"></label>
+<label>类型
+<select id="seq-type">
+<option value="linear">linear</option>
+<option value="circular">circular</option>
+</select>
+</label>
+</div>
+<textarea id="seq-residues" rows="4" placeholder="ACGTACGT... 或粘贴 FASTA"></textarea>
+<div class="row">
+<button id="seq-submit">提交裸序列</button>
+<button id="seq-import">按 FASTA 导入</button>
+</div>
+<p id="seq-status" class="status"></p>
+</section>
+
+<section class="card" id="analyze-card">
+<h2>2. 运行分析</h2>
+<p class="hint">已选序列：<code id="cur-seq">（未选择）</code></p>
+<div class="grid">
+<button data-an="composition">组成 (GC/MW)</button>
+<button data-an="reverse-complement">反向互补</button>
+<button data-an="translate">六读码框翻译</button>
+<button data-an="orfs">ORF 检测</button>
+<button data-an="motif">motif 检索</button>
+<button data-an="restriction">限制酶切点</button>
+<button data-an="digest">酶切片段</button>
+<button data-job="job">提交分析任务</button>
+</div>
+<div class="row params">
+<label>motif pattern<input id="motif-pattern" type="text" placeholder="RGC"></label>
+<label>min_aa_len<input id="min-aa" type="number" value="1" min="0"></label>
+<label>enzyme ids<input id="enzyme-ids" type="text" placeholder="enzyme-000001"></label>
+</div>
+<pre id="analyze-out" class="out"></pre>
+</section>
+
+<section class="card" id="library-card">
+<h2>3. motif 库 / 限制酶目录</h2>
+<div class="row">
+<fieldset>
+<legend>新建 motif</legend>
+<input id="motif-name" type="text" placeholder="name">
+<input id="motif-pat" type="text" placeholder="RGSCW">
+<button id="motif-add">添加</button>
+</fieldset>
+<fieldset>
+<legend>新建限制酶</legend>
+<input id="enz-name" type="text" placeholder="EcoRI">
+<input id="enz-site" type="text" placeholder="GAATTC">
+<input id="enz-cut" type="number" placeholder="cut_offset" value="1">
+<button id="enz-add">添加</button>
+</fieldset>
+</div>
+<div class="row">
+<button id="motif-list">列出 motif</button>
+<button id="enz-list">列出酶</button>
+</div>
+<pre id="library-out" class="out"></pre>
+</section>
+
+<section class="card" id="job-card">
+<h2>4. 分析任务与恢复</h2>
+<div class="row">
+<button id="job-list">列出任务</button>
+<button id="reconcile">重启重算 (reconcile)</button>
+</div>
+<pre id="job-out" class="out"></pre>
+</section>
+</main>
+<footer><small>前端源码不计入后端代码行数。所有计算由 Go 后端 + SQLite 完成。</small></footer>
+<script src="app.js"></script>
+</body>
+</html>
