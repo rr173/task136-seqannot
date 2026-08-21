@@ -94,18 +94,39 @@ func TestFindReverseStrandORF(t *testing.T) {
 }
 
 func TestFindCircularWrap(t *testing.T) {
-	// A circular sequence where the only ATG...stop pair wraps the origin.
-	// Construct residues so that frame0 has no in-frame stop in the linear
-	// pass but one appears after wrap. Simplest: a circular genome that is
-	// entirely "ATG" repeated with a stop inserted such that the stop lands
-	// past the origin relative to the start.
-	// "AAATAAATG" circular, frame2: positions 3,4,5 = ATA, 6,7,8 = ATG start,
-	// wraps to 0,1,2 = AAA... no stop. Use "TAAATGAT" circular:
-	// length 8. frame2 codons (offset 2): ATG (idx2-4 start), then wrap TAA.
-	s, _ := seq.NewSequence("t", "TAAATGAT", seq.TypeCircular, "", "")
+	// A circular sequence where the start codon is the last codon of the frame
+	// (it spans the origin) and the only in-frame stop sits across the origin,
+	// before the start in linear codon order. Forward frame 0 of "TAAATGAT"
+	// (n=8, circular): codons ATG (positions 3-5, start) then wrap-completed
+	// TTA->ATT (positions 6-8,1,2) ... actually frame 0 offset 0 yields codons
+	// ATG(1-3)? No: we use a known-good case. GTAACCCAT forward frame 1 emits
+	// ATG(8,9,1) start and closes on TAA(2-4) stop across the origin.
+	s, _ := seq.NewSequence("t", "GTAACCCAT", seq.TypeCircular, "", "")
 	orfs := Find(s, Options{MinAALen: 1})
-	_ = orfs // circular wrap is exercised; specific ORF presence depends on
-	// frame layout; the important guarantee is no panic and deterministic.
+	var got *ORF
+	for i := range orfs {
+		if orfs[i].Frame == 1 {
+			got = &orfs[i]
+			break
+		}
+	}
+	if got == nil {
+		t.Fatalf("frame 1 ORF missing among %+v", orfs)
+	}
+	// start at the origin-spanning ATG (position 8), stop across the origin
+	// (TAA at 2-4): End wraps below Start, protein is M*.
+	if got.Start != 8 || got.End != 4 {
+		t.Fatalf("coords=[%d,%d] want [8,4] (origin-spanning)", got.Start, got.End)
+	}
+	if got.StartCodon != "ATG" || got.StopCodon != "TAA" {
+		t.Fatalf("codons start=%q stop=%q want ATG/TAA", got.StartCodon, got.StopCodon)
+	}
+	if got.Protein != "M*" {
+		t.Fatalf("protein=%q want M*", got.Protein)
+	}
+	if got.Length != 2 {
+		t.Fatalf("length=%d want 2 (M + stop)", got.Length)
+	}
 }
 
 func TestFindNoStopPartial(t *testing.T) {
