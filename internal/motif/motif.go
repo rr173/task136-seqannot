@@ -53,9 +53,14 @@ func Compile(id, name, pattern, desc string) (Motif, error) {
 }
 
 // MatchAt reports whether m matches the window of s starting at 0-based offset
-// start on strand strand ('+' forward, '-' reverse). For '-' the window is
-// taken from the reverse complement but coordinates are projected to forward
-// strand by the caller via Search. Circular sequences wrap.
+// start on strand strand ('+' forward, '-' reverse). On the '+' strand `start`
+// is a forward index and the window reads forward positions start, start+1, ...
+// On the '-' strand `start` is an index into the reverse complement: the window
+// reads forward positions n-1-start, n-1-(start+1), ... (right-to-left, i.e. in
+// RC/motif order), taking the complement of each forward base so that the
+// matched bytes are the actual bases paired with the motif in its own
+// orientation. Forward-strand 1-based inclusive coordinates are projected from
+// the RC window by Search. Circular sequences wrap.
 func (m Motif) MatchAt(s seq.Sequence, start int, strand byte) (Hit, bool) {
 	mlen := len(m.Sets)
 	n := s.Length()
@@ -64,14 +69,20 @@ func (m Motif) MatchAt(s seq.Sequence, start int, strand byte) (Hit, bool) {
 	}
 	var matched []byte
 	for i := 0; i < mlen; i++ {
+		// Forward strand: window advances left-to-right over forward
+		// positions. Reverse strand: window is the RC slice beginning at RC
+		// index `start`, so it walks forward positions right-to-left
+		// (n-1-start, n-1-(start+1), ...) to read the bases in motif order.
 		var pos int
-		if s.IsCircular() {
-			pos = seq.WrapIndex(start+i, n)
+		if strand == '-' {
+			pos = n - 1 - (start + i)
 		} else {
 			pos = start + i
-			if pos >= n {
-				return Hit{}, false
-			}
+		}
+		if s.IsCircular() {
+			pos = seq.WrapIndex(pos, n)
+		} else if pos < 0 || pos >= n {
+			return Hit{}, false
 		}
 		var b byte
 		if strand == '-' {
