@@ -3,6 +3,7 @@ package httpapi
 import (
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 
 	"task136-seqannot/internal/service"
@@ -21,13 +22,20 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 }
 
 // readJSON decodes the request body into v. It limits the body to 8 MiB to
-// avoid unbounded reads of large sequence payloads.
+// avoid unbounded reads of large sequence payloads. The body must contain
+// exactly one JSON value; a request that appends a second JSON value after the
+// first (e.g. `{"x":1}{"x":2}`) is treated as malformed rather than silently
+// accepting only the first value.
 func readJSON(r *http.Request, v any) error {
 	r.Body = http.MaxBytesReader(nil, r.Body, 8<<20)
 	dec := json.NewDecoder(r.Body)
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(v); err != nil {
 		return err
+	}
+	// A second, trailing JSON value makes the whole request malformed.
+	if err := dec.Decode(new(any)); err == nil || !errors.Is(err, io.EOF) {
+		return errors.New("service: request body must contain a single JSON value")
 	}
 	return nil
 }
