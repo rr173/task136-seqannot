@@ -1,6 +1,8 @@
 package httpapi
 
 import (
+	"errors"
+	"io"
 	"net/http"
 	"strconv"
 
@@ -34,13 +36,20 @@ func (h handlers) motifSearch(w http.ResponseWriter, r *http.Request) {
 		Pattern  string `json:"pattern"`
 		MotifID  string `json:"motif_id"`
 	}
-	// motif-search accepts either a JSON body or query params for convenience
-	if r.ContentLength > 0 {
-		if err := readJSON(r, &body); err != nil {
+	// motif-search accepts either a JSON body or query params for convenience.
+	// A chunked (Transfer-Encoding: chunked) request has no Content-Length —
+	// r.ContentLength is -1, not > 0 — so gating on ContentLength alone would
+	// drop the body and treat it as an empty request. Read the body whenever a
+	// content length is unknown or positive; only fall back to query params
+	// when the request is known to have no body (ContentLength == 0) or the
+	// body is empty (io.EOF). A malformed body is a real error and is reported.
+	if r.ContentLength != 0 {
+		if err := readJSON(r, &body); err != nil && !errors.Is(err, io.EOF) {
 			writeErr(w, err)
 			return
 		}
-	} else {
+	}
+	if body.Pattern == "" && body.MotifID == "" {
 		body.Pattern = r.URL.Query().Get("pattern")
 		body.MotifID = r.URL.Query().Get("motif_id")
 	}

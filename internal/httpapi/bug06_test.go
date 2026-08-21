@@ -45,3 +45,34 @@ func TestBug06_ChunkedMotifBodyIsDecoded(t *testing.T) {
 		t.Fatalf("chunked motif body was not decoded: status=%d body=%s", rr.Code, rr.Body.String())
 	}
 }
+
+// TestBug06_QueryParamFallback verifies the convenience query-param path still
+// works when there is genuinely no body (ContentLength == 0), so the fix for
+// chunked bodies did not regress the no-body fallback.
+func TestBug06_QueryParamFallback(t *testing.T) {
+	dir := t.TempDir()
+	st, err := store.Open(filepath.Join(dir, "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	service.ResetCounters()
+	mux := NewMux(service.New(st))
+	create := httptest.NewRequest(http.MethodPost, "/sequences", strings.NewReader(`{"name":"s","residues":"AACG","type":"linear"}`))
+	create.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, create)
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("create status=%d body=%s", rr.Code, rr.Body.String())
+	}
+	var created struct{ ID string `json:"id"` }
+	if err := json.Unmarshal(rr.Body.Bytes(), &created); err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/sequences/"+created.ID+"/motif-search?pattern=AAC", nil)
+	rr = httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK || !strings.Contains(rr.Body.String(), `"pattern":"AAC"`) {
+		t.Fatalf("query-param motif not matched: status=%d body=%s", rr.Code, rr.Body.String())
+	}
+}
