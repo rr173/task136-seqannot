@@ -43,7 +43,10 @@ func ParseFasta(text string) ([]FastaRecord, error) {
 		if cur == nil {
 			return nil
 		}
-		res := strings.ToUpper(strings.ReplaceAll(seqb.String(), " ", ""))
+		// Whitespace inside the accumulated sequence (spaces, tabs, etc.) is
+		// typographic line-wrapping and must be stripped so the residues keep
+		// their original order; the result is then upper-cased uniformly.
+		res := strings.ToUpper(stripSeqWhitespace(seqb.String()))
 		seqb.Reset()
 		cur.Residues = res
 		if cur.ID == "" {
@@ -104,6 +107,22 @@ func splitHeader(h string) (string, string) {
 		return h, ""
 	}
 	return h[:idx], strings.TrimSpace(h[idx+1:])
+}
+
+// stripSeqWhitespace removes every whitespace rune (spaces, tabs, newlines,
+// carriage returns, etc.) from s, leaving only the residue characters in their
+// original order. It is the typographic normalizer applied to accumulated
+// sequence data before upper-casing so the engine never stores line-wrapping
+// spacing as residues.
+func stripSeqWhitespace(s string) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	for _, r := range s {
+		if r != ' ' && r != '\t' && r != '\n' && r != '\r' {
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
 }
 
 // FormatFasta renders records back to FASTA text with a fixed 60-char line
