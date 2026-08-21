@@ -14,11 +14,12 @@ import (
 // cutter (Type II with a fixed offset); ambiguous multi-cut enzymes are not
 // modeled, which keeps digestion deterministic.
 type Enzyme struct {
-	ID        string `json:"id"`
-	Name      string `json:"name"`
-	Site      string `json:"site"` // upper-cased IUPAC
-	CutOffset int    `json:"cut_offset"` // 0-based offset from site start to the phosphodiester cut
-	Sets      []uint8 `json:"-"`
+	ID         string `json:"id"`
+	Name       string `json:"name"`
+	Site       string `json:"site"`        // upper-cased IUPAC
+	CutOffset  int    `json:"cut_offset"`  // 0-based offset from site start to the phosphodiester cut
+	Sets       []uint8 `json:"-"`
+	palindrome bool   // caches whether Site is its own reverse complement (IUPAC)
 }
 
 // CutSite is one occurrence of an enzyme's recognition site on a sequence,
@@ -53,7 +54,7 @@ func Compile(id, name, site string, cut int) (Enzyme, error) {
 		}
 		sets[i] = s
 	}
-	return Enzyme{ID: id, Name: name, Site: up, CutOffset: cut, Sets: sets}, nil
+	return Enzyme{ID: id, Name: name, Site: up, CutOffset: cut, Sets: sets, palindrome: seq.ReverseComplement(up) == up}, nil
 }
 
 // FindSites scans both strands of s for every occurrence of e's recognition
@@ -61,17 +62,28 @@ func Compile(id, name, site string, cut int) (Enzyme, error) {
 // reverse complement but reported in forward coordinates. For circular
 // sequences the scan wraps one full revolution so sites spanning the origin
 // are detected. The order is forward-strand start, then '+' before '-'.
+//
+// When the recognition site is its own reverse complement (a palindromic site
+// such as GAATTC), reading the reverse strand reproduces the very same window
+// as the forward strand, so a '-' match at any start is the same physical cut
+// as the '+' match there — not a second cut. Scanning '-' in that case would
+// invent a non-existent pseudo-hit, so the '-' strand is skipped for
+// palindromic enzymes. Non-palindromic sites (e.g. TCA, GG) have distinct
+// reverse-strand occurrences that are real, separate cuts and are reported.
 func FindSites(s seq.Sequence, e Enzyme) []CutSite {
 	n := s.Length()
 	if n == 0 || len(e.Sets) == 0 {
 		return nil
 	}
-	slen := len(e.Sets)
 	var sites []CutSite
 	for strandIdx := 0; strandIdx < 2; strandIdx++ {
 		strand := byte('+')
 		if strandIdx == 1 {
 			strand = '-'
+		}
+		if strand == '-' && e.palindrome {
+			// reverse-strand scan would duplicate forward hits
+			continue
 		}
 		for start := 0; start < n; start++ {
 			if matchSite(s, start, e.Sets, strand) {
@@ -79,31 +91,46 @@ func FindSites(s seq.Sequence, e Enzyme) []CutSite {
 			}
 		}
 	}
-	// On circular sequences sites whose window wraps past the end are also
-	// caught by the start scan because matchSite uses WrapIndex internally.
-	_ = slen
+	// On circular sequences sites whose window wraps past the end are caught by
+	// the start scan because matchSite uses WrapIndex internally, so no extra
+	// wrap-around pass is needed.
 	return sites
 }
 
 // matchSite reports whether e.Sets matches the window of s starting at 0-based
 // `start` on the given strand, wrapping on circular sequences.
+//
+// On the '+' strand the recognition site is read 5'->3' along the forward
+// window [start, start+slen). On the '-' strand the site is read 5'->3' along
+// the reverse complement of that same window, i.e. the i-th site base is
+// compared against Complement(forward[start+slen-1-i]) — the window is matched
+// in reverse-complement order, not merely complemented. Matching only the
+// complement (without reversal) misses real reverse-strand sites and invents
+// pseudo-hits that have no biological reverse-strand site, so this is the
+// correct projection of a reverse-strand recognition event.
 func matchSite(s seq.Sequence, start int, sets []uint8, strand byte) bool {
 	n := s.Length()
-	for i := 0; i < len(sets); i++ {
+	slen := len(sets)
+	for i := 0; i < slen; i++ {
+		// Window offset of the forward base compared against site position i.
+		// Forward strand reads the window left-to-right (offset i); reverse
+		// strand reads it right-to-left (offset slen-1-i), complemented.
+		off := i
+		if strand == '-' {
+			off = slen - 1 - i
+		}
 		var pos int
 		if s.IsCircular() {
-			pos = seq.WrapIndex(start+i, n)
+			pos = seq.WrapIndex(start+off, n)
 		} else {
-			pos = start + i
+			pos = start + off
 			if pos >= n {
 				return false
 			}
 		}
-		var b byte
+		b := s.Residues[pos]
 		if strand == '-' {
-			b = seq.Complement(s.Residues[pos])
-		} else {
-			b = s.Residues[pos]
+			b = seq.Complement(b)
 		}
 		bs, ok := seq.SetFor(b)
 		if !ok {
@@ -116,28 +143,24 @@ func matchSite(s seq.Sequence, start int, sets []uint8, strand byte) bool {
 	return true
 }
 
-// buildCutSite projects a 0-based start into the public 1-based CutSite. For
-// forward-strand hits the cut is at start + cutOffset (0-based) -> bond between
-// that base and the next. For reverse-strand hits the cut mirrors across the
-// site.
+// buildCutSite projects a 0-based window start into the public 1-based CutSite.
+// The matched window always spans forward positions [start, start+slen) (wrapped
+// on circular sequences). For a forward-strand hit the recognition site reads
+// left-to-right over that window, so the cut offset is measured from fwdStart.
+// For a reverse-strand hit the site reads right-to-left over the same window
+// (its reverse complement), so the cut offset mirrors to be measured from
+// fwdEnd: the phosphodiester cut lies at fwdEnd - cutOffset, consistent with
+// the recognition direction. Both branches yield a 1-based CutPos with the bond
+// (CutPos, CutPos+1) cleaved (wrapping on circular sequences).
 func buildCutSite(e Enzyme, s seq.Sequence, start int, strand byte, n int) CutSite {
 	slen := len(e.Sets)
-	var fwdStart, fwdEnd int
-	if strand == '-' {
-		fwdStart = n - (start + slen)
-		fwdEnd = n - 1 - start
-		if s.IsCircular() {
-			fwdStart = seq.WrapIndex(fwdStart, n)
-		}
-	} else {
-		fwdStart = start
-		fwdEnd = start + slen - 1
-		if s.IsCircular() {
-			fwdEnd = seq.WrapIndex(fwdEnd, n)
-		}
+	fwdStart := start
+	fwdEnd := start + slen - 1
+	if s.IsCircular() {
+		fwdEnd = seq.WrapIndex(fwdEnd, n)
 	}
-	// cut position (1-based): on + strand, site_start_1based + cutOffset gives
-	// the base after which the bond is cut. On - strand the cut is mirrored.
+	// cut position (1-based): on '+' the offset runs forward from fwdStart; on
+	// '-' it mirrors and runs back from fwdEnd.
 	cut1 := fwdStart + 1 + e.CutOffset
 	if strand == '-' {
 		cut1 = fwdEnd + 1 - e.CutOffset
