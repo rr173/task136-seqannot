@@ -16,6 +16,7 @@ var scenarios = []scenario{
 	{"alignment", scenarioAlignment},
 	{"job-submit-replay", scenarioJobReplay},
 	{"restart-recovery", scenarioRestart},
+	{"job-fail-then-recover", scenarioJobFailThenRecover},
 	{"features", scenarioFeatures},
 	{"frontend-served", scenarioFrontend},
 	{"error-handling", scenarioErrors},
@@ -306,6 +307,86 @@ func scenarioRestart() error {
 	}
 	if asString(resumed["status"]) != "done" {
 		return fmt.Errorf("resume status=%v want done", resumed["status"])
+	}
+	return nil
+}
+
+// scenarioJobFailThenRecover exercises the fix for a job that fails, is resumed,
+// and then succeeds: its final state must be done with an empty error field,
+// not the stale error from the prior failure. The failure is induced by a motif
+// step referencing a motif id that does not exist yet; submitting the job runs
+// it synchronously, so it lands as failed. The motif is then created and the
+// job resumed: the step now succeeds, and the persisted error must be cleared.
+func scenarioJobFailThenRecover() error {
+	b, err := newServer()
+	if err != nil {
+		return err
+	}
+	defer b.cleanup()
+	id, err := makeSeq(b, "AGCAGCAGC", "linear")
+	if err != nil {
+		return err
+	}
+	// Reference a motif id that does not exist; the job will fail on this step.
+	missingMotifID := "motif-000001"
+	_, _, _ = do(b.server, "POST", "/jobs", map[string]any{
+		"sequence_id": id,
+		"steps": []map[string]any{
+			{"name": "composition"},
+			{"name": "motif", "params": map[string]any{"motif_id": missingMotifID}},
+		},
+	})
+	// The job row persists as failed even though SubmitJob returns an error.
+	var jobs []map[string]any
+	if err := decodeOK(b.server, "GET", "/jobs", nil, &jobs); err != nil {
+		return err
+	}
+	if len(jobs) != 1 {
+		return fmt.Errorf("list jobs len=%d want 1", len(jobs))
+	}
+	failed := jobs[0]
+	if asString(failed["status"]) != "failed" {
+		return fmt.Errorf("post-fail status=%v want failed", failed["status"])
+	}
+	if asString(failed["error"]) == "" {
+		return fmt.Errorf("post-fail error is empty, want a failure message")
+	}
+	jid := asString(failed["id"])
+
+	// Create the missing motif so the resumed motif step now succeeds.
+	var mot map[string]any
+	if err := decodeOK(b.server, "POST", "/motifs",
+		map[string]any{"name": "m1", "pattern": "RGC"}, &mot); err != nil {
+		return err
+	}
+	if asString(mot["id"]) != missingMotifID {
+		// The deterministic id counter must yield motif-000001 here; if the
+		// counter drifted (a prior scenario left state), the recovery would
+		// not resolve the referenced id and the resume would keep failing.
+		return fmt.Errorf("motif id=%q want %q", asString(mot["id"]), missingMotifID)
+	}
+
+	// Resume the previously-failed job; it should now complete.
+	var resumed map[string]any
+	if err := decodeOK(b.server, "POST", "/jobs/"+jid+"/resume", nil, &resumed); err != nil {
+		return err
+	}
+	if asString(resumed["status"]) != "done" {
+		return fmt.Errorf("recover status=%v want done: %+v", resumed["status"], resumed)
+	}
+	if asString(resumed["error"]) != "" {
+		return fmt.Errorf("recover error=%q want empty (stale failure exposed)", asString(resumed["error"]))
+	}
+	// A fresh read of the job must also show done + empty error.
+	var got map[string]any
+	if err := decodeOK(b.server, "GET", "/jobs/"+jid, nil, &got); err != nil {
+		return err
+	}
+	if asString(got["status"]) != "done" {
+		return fmt.Errorf("get status=%v want done", got["status"])
+	}
+	if asString(got["error"]) != "" {
+		return fmt.Errorf("get error=%q want empty", asString(got["error"]))
 	}
 	return nil
 }

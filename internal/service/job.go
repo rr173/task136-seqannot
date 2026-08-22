@@ -88,8 +88,12 @@ func (svc *Service) runJob(ctx context.Context, jobID string) error {
 	if job.Results != "" && job.Results != "{}" {
 		_ = json.Unmarshal([]byte(job.Results), &results)
 	}
-	// mark running
+	// mark running. Clear any error left by a prior failed run so that, while
+	// the job is executing, a caller never observes the stale failure message.
+	// The success path clears it again on completion; the failure path
+	// overwrites it with the new error.
 	job.Status = StatusRunning
+	job.Error = ""
 	job.UpdatedAt = stamp()
 	if err := svc.store.SaveJob(ctx, job); err != nil {
 		return err
@@ -133,8 +137,12 @@ func (svc *Service) runJob(ctx context.Context, jobID string) error {
 	if err != nil {
 		return err
 	}
+	// Clear any error left by a previous failed run. A job that failed, was
+	// resumed, and now completed must present a clean done state: status=done
+	// with an empty error, never the stale message from the prior failure.
 	job.Status = StatusDone
 	job.Progress = len(steps)
+	job.Error = ""
 	job.UpdatedAt = stamp()
 	return svc.store.SaveJob(ctx, job)
 }
