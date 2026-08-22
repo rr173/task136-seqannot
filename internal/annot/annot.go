@@ -96,11 +96,17 @@ func IntervalOverlap(a, b Feature) bool {
 }
 
 // QueryOverlap returns the features whose region overlaps the query interval
-// [qstart, qend] (1-based inclusive). For circular molecules a feature wraps
-// if its Start>End; the query may also wrap. The check is position-scan based
-// for correctness across the wrap boundary.
+// (1-based inclusive). For circular molecules a feature wraps when its
+// Start>End, and the query interval likewise wraps when qstart>qend (the
+// region is [qstart,n] U [1,qend]); only features intersecting that arc are
+// returned, not those sitting in the uncovered middle. On a linear molecule a
+// reversed query (qstart>qend) is normalized to [qend,qstart]. The check is
+// position-scan based for correctness across the wrap boundary.
 func QueryOverlap(features []Feature, n int, circular bool, qstart, qend int) []Feature {
-	if qstart > qend {
+	// On a circular molecule qstart>qend is a wrap-around query and must be
+	// preserved; swapping it would invert the arc and include the uncovered
+	// middle. Only linear queries are normalized.
+	if !circular && qstart > qend {
 		qstart, qend = qend, qstart
 	}
 	var out []Feature
